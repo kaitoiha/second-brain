@@ -18,31 +18,31 @@ Notion・Obsidianを融合させたような、Zettelkasten方式のMarkdown対�
 ## 🛠️ 技術スタック
 
 ### フロントエンド
-- **Next.js 14+** (App Router)
-- **React 18+**
-- **TypeScript**
-- **Tailwind CSS**
-- **D3.js** (グラフビュー)
+- **Next.js 15** (App Router)
+- **React 19**
+- **TypeScript 5**
+- **Tailwind CSS 4**
+- **D3.js 7** (グラフビュー)
 
 ### バックエンド
 - **Next.js API Routes**
-- **Prisma** (ORM)
+- **Prisma 6** (ORM)
 - **Supabase** (PostgreSQL)
 
 ### 認証
-- **Auth.js (NextAuth.js v5)**
+- **Auth.js v5 (NextAuth.js v5)**
   - メールアドレス + パスワード
   - Google OAuth
 
 ### バリデーション
-- **Zod**
+- **Zod 3**
 
 ### Markdownエディタ
-- **react-markdown** (v9.0.3)
-- **remark-gfm** (v4.0.0) - GitHub Flavored Markdown
-- **rehype-highlight** (v7.0.1) - シンタックスハイライト
+- **react-markdown 9**
+- **remark-gfm 4** - GitHub Flavored Markdown
+- **rehype-highlight 7** - シンタックスハイライト
 - **highlight.js**
-- **@tailwindcss/typography** (v0.5.16)
+- **@tailwindcss/typography**
 
 ### 検索機能（Phase 2以降）
 - 検討中（Supabase FTS / Fuse.js / Algolia など）
@@ -581,28 +581,27 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY="..."
 ```json
 {
   "dependencies": {
-    "next": "^14.0.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "@prisma/client": "^5.0.0",
-    "next-auth": "^5.0.0-beta",
-    "zod": "^3.22.0",
-    "react-markdown": "^9.0.3",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@prisma/client": "^6.0.0",
+    "next-auth": "^5.0.0",
+    "zod": "^3.23.0",
+    "react-markdown": "^9.0.0",
     "remark-gfm": "^4.0.0",
-    "rehype-highlight": "^7.0.1",
-    "highlight.js": "^11.0.0",
-    "@tailwindcss/typography": "^0.5.16",
-    "d3": "^7.0.0",
-    "@types/d3": "^7.0.0"
+    "rehype-highlight": "^7.0.0",
+    "highlight.js": "^11.10.0",
+    "@tailwindcss/typography": "^0.5.0",
+    "d3": "^7.9.0",
+    "@types/d3": "^7.4.0"
   },
   "devDependencies": {
-    "prisma": "^5.0.0",
+    "prisma": "^6.0.0",
     "typescript": "^5.0.0",
     "@types/node": "^20.0.0",
-    "@types/react": "^18.0.0",
-    "tailwindcss": "^3.0.0",
-    "autoprefixer": "^10.0.0",
-    "postcss": "^8.0.0"
+    "@types/react": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "@tailwindcss/postcss": "^4.0.0"
   }
 }
 ```

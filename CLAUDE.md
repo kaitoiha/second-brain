@@ -1,128 +1,255 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+このファイルは、Claude Code (claude.ai/code) がこのリポジトリで作業する際のガイダンスを提供します。
 
-## Project Overview
+## プロジェクト概要
 
-This is a **Zettelkasten information management system** - a knowledge management application inspired by Notion and Obsidian. It implements the Zettelkasten method (slip-box) for personal and team knowledge management with Markdown support.
+**Zettelkasten情報管理システム** - NotionとObsidianを融合させたような知識管理アプリケーション。個人利用からチーム利用まで対応可能な、Markdown対応の情報管理システムです。
 
-The system facilitates the transformation of fleeting thoughts into structured permanent notes, visualizes connections between notes, and supports lightweight Markdown-based note management.
+思考の断片（走り書き）から体系的な知識（永久保存メモ）への変換を支援し、ノート間のリンクを可視化して知識のつながりを発見します。
 
-## Key Concepts
+## 核心概念
 
-The application manages three distinct note types that follow the Zettelkasten methodology:
+Zettelkasten方式に従った3種類のメモを管理します：
 
-1. **Fleeting Notes (走り書きメモ)**: Temporary ideas and quick thoughts that can be marked as "done" to automatically generate permanent notes
-2. **Literature Notes (文献メモ)**: References, citations, and summaries from external sources (books, articles, web) with optional URLs
-3. **Permanent Notes (永久保存メモ)**: Structured knowledge notes that are atomically organized (one concept per note) and can link to each other and literature notes
+1. **走り書きメモ (Fleeting Notes)**: 一時的なアイデア・思いつきを素早く記録。「メモ済み」にすると自動的に永久保存メモが生成される
+2. **文献メモ (Literature Notes)**: 外部ソース（本、記事、Web）からの引用・要約。URL（オプション）を含む
+3. **永久保存メモ (Permanent Notes)**: 整理された知識として体系的に保存。原子的（1つの概念＝1メモ）に構成され、他のメモとリンク可能
 
-When a fleeting or literature note is marked as "done", a permanent note is automatically created and the original is archived (not deleted).
+走り書きメモまたは文献メモを「メモ済み」にすると、永久保存メモが自動的に作成され、元メモはアーカイブされます（削除はしない）。
 
-## Tech Stack
+## 技術スタック
 
-- **Next.js 15.5.6** with App Router
-- **React 19.1.0**
+- **Next.js 15** (App Router)
+- **React 19**
 - **TypeScript 5**
-- **Tailwind CSS 4** (using new PostCSS architecture)
-- **Planned**: Prisma + Supabase (PostgreSQL), Auth.js v5, react-markdown, D3.js for graph view
+- **Tailwind CSS 4** (新PostCSSアーキテクチャ)
+- **Prisma 6** (ORM)
+- **Supabase** (PostgreSQL)
+- **Auth.js v5** (NextAuth.js v5)
+- **Zod 3** (バリデーション)
+- **react-markdown 9** + remark-gfm 4 + rehype-highlight 7
+- **D3.js 7** (グラフビュー)
 
-## Development Commands
+## 開発コマンド
 
 ```bash
-# Start development server
+# 開発サーバー起動
 npm run dev
 
-# Build for production
+# 本番ビルド
 npm run build
 
-# Start production server
+# 本番サーバー起動
 npm run start
 
-# Run linter
+# リンター実行
 npm run lint
+
+# Prismaマイグレーション生成
+npx prisma migrate dev
+
+# Prisma Studio起動（DB管理GUI）
+npx prisma studio
+
+# データベースをPrismaスキーマと同期
+npx prisma db push
 ```
 
-## Project Architecture
+## プロジェクトアーキテクチャ
 
-### Database Design (To Be Implemented)
+### データベース設計（実装予定）
 
-The data model follows this hierarchy:
+データモデルの階層構造：
 
 ```
 User (1:N)
-├─ FleetingNote (isDone flag → auto-generates PermanentNote)
-├─ LiteratureNote (isDone flag → auto-generates PermanentNote)
+├─ FleetingNote (isDoneフラグ → PermanentNoteを自動生成)
+├─ LiteratureNote (isDoneフラグ → PermanentNoteを自動生成)
 └─ PermanentNote
-   ├─ N:M relationship with Category (flat structure, no hierarchy)
-   ├─ N:M relationship with LiteratureNote (for citations)
-   └─ N:M self-referencing (bidirectional links between permanent notes)
+   ├─ N:M Category（フラット構造、階層なし）
+   ├─ N:M LiteratureNote（引用関係）
+   └─ N:M 自己参照（永久保存メモ同士の双方向リンク）
 ```
 
-Key tables to implement:
-- Authentication: `users`, `accounts`, `sessions`, `verification_tokens`
-- Notes: `fleeting_notes`, `literature_notes`, `permanent_notes`, `permanent_note_links`
-- Organization: `categories`, junction tables for relationships
+実装すべき主要テーブル：
+- **認証**: `users`, `accounts`, `sessions`, `verification_tokens`
+- **メモ**: `fleeting_notes`, `literature_notes`, `permanent_notes`, `permanent_note_links`
+- **カテゴリー**: `categories`, `categories_on_permanent_notes`, `categories_on_literature_notes`
+- **リレーション**: `permanent_notes_on_literature_notes`
 
-### Important Note Fields
+### 重要なフィールド
 
-- **PermanentNote**: `sourceType` and `sourceId` track origin (fleeting/literature/manual)
-- **PermanentNote**: `showInGraph` boolean controls visibility in graph view
-- **FleetingNote/LiteratureNote**: `isDone` flag triggers automatic permanent note creation
+- **PermanentNote**: `sourceType`と`sourceId`で元メモを追跡（fleeting/literature/manual）
+- **PermanentNote**: `showInGraph`でグラフビューへの表示を制御
+- **FleetingNote/LiteratureNote**: `isDone`フラグで永久保存メモの自動作成をトリガー
 
-### Markdown Link Syntax
+### Markdownリンク記法
 
-The app will use `[[Note Title]]` syntax (Obsidian/Roam-style) for internal note linking. Links need to be parsed and automatically converted to database relationships for backlink tracking.
+`[[メモタイトル]]`記法（Obsidian/Roam風）を使用して内部リンクを作成。パーサーでこれを検出し、データベースのリレーションシップに変換してバックリンク追跡を実現します。
 
-### Graph View Implementation
+### グラフビュー実装
 
-Uses D3.js to visualize permanent notes and their connections. Nodes represent notes, edges represent bidirectional links. Clicking a node opens the note in a modal. The graph supports filtering by category and note type.
+D3.jsを使用して永久保存メモとその接続を可視化。ノードはメモ、エッジは双方向リンクを表現。ノードクリックでモーダル表示。カテゴリーやメモタイプでフィルタリング可能。
 
-## UI/UX Architecture
+## UI/UXアーキテクチャ
 
-### Layout Structure
-- **Sidebar** (LINK section): Shows categories, literature notes with `isDone=true`, permanent notes list
-- **Main Area**: Three-column layout (or tabs on mobile) showing fleeting/literature/permanent notes
-- **Modal System**: Universal modal for viewing/editing all note types with preview and edit modes
-- **Graph View**: Full-screen D3.js visualization with filtering controls
+### レイアウト構造
+- **サイドバー** (LINKセクション): カテゴリー、`isDone=true`の文献メモ、永久保存メモ一覧を表示
+- **メインエリア**: 3カラムレイアウト（モバイルではタブ切替）で走り書き/文献/永久保存メモを表示
+- **モーダルシステム**: 全メモタイプの閲覧・編集用の統一モーダル。プレビューモードと編集モードを切替
+- **グラフビュー**: フィルタリングコントロール付きのフルスクリーンD3.js可視化
 
-### Modal Behavior
-- Opens from: note cards, graph nodes, category pages
-- Two modes: preview (read-only) and edit (with real-time markdown preview)
-- Always shows: title, categories, markdown content, timestamps, backlinks section at bottom
+### モーダルの挙動
+- **開き方**: メモカード、グラフのノード、カテゴリーページからクリック
+- **2つのモード**: プレビュー（読み取り専用）と編集（リアルタイムMarkdownプレビュー）
+- **常に表示**: タイトル、カテゴリー、Markdown本文、タイムスタンプ、下部のバックリンクセクション
 
-## Implementation Phases
+## 実装フェーズ
 
-### Phase 1 (Current MVP Target)
-- Authentication system (email/password + Google OAuth)
-- CRUD operations for all three note types
-- "Done" checkbox → permanent note auto-generation
-- Category system with many-to-many relationships
-- Modal system with preview/edit modes
-- Basic UI layout (sidebar, main area)
-- Static search UI (no backend yet)
+### Phase 1（現在のMVP目標）
+- 認証システム（メール/パスワード + Google OAuth）
+- 3種類のメモのCRUD操作
+- 「メモ済み」チェックボックス → 永久保存メモの自動生成
+- 多対多のカテゴリーシステム
+- プレビュー/編集モード付きモーダルシステム
+- 基本UIレイアウト（サイドバー、メインエリア）
+- 静的な検索UI（バックエンド未実装）
 
 ### Phase 2
-- `[[Link]]` syntax parsing and backlink detection
-- D3.js graph view with basic interactions
-- Full-text search implementation (Supabase FTS or Fuse.js)
+- `[[リンク]]`記法のパースとバックリンク検出
+- 基本的なインタラクション機能を持つD3.jsグラフビュー
+- 全文検索の実装（Supabase FTSまたはFuse.js）
 
 ### Phase 3
-- Graph view filters (by category, note type)
-- Team features (workspaces, invitations)
-- Export functionality, keyboard shortcuts, dark mode
+- グラフビューのフィルター（カテゴリー別、メモタイプ別）
+- チーム機能（ワークスペース、招待）
+- エクスポート機能、キーボードショートカット、ダークモード
 
-## Path Alias
+## パスエイリアス
 
-Use `@/*` for imports from the `src` directory as configured in `tsconfig.json`:
+`tsconfig.json`で設定されている`@/*`を使用して`src`ディレクトリからインポートします：
 
 ```typescript
 import Component from '@/components/Component'
 import { helper } from '@/lib/utils'
 ```
 
-## Code Style Notes
+## ディレクトリ構成
 
-- This is a Japanese-language application - UI text and documentation will be in Japanese
-- The codebase follows strict TypeScript with Next.js 15 App Router conventions
-- Uses ESLint with Next.js core-web-vitals and TypeScript presets
-- Tailwind CSS v4 with new PostCSS architecture (note the `@tailwindcss/postcss` dependency)
+実装時は以下の構造に従ってください：
+
+```
+src/
+├── app/
+│   ├── (auth)/              # 認証ルート
+│   │   ├── login/
+│   │   └── register/
+│   ├── (dashboard)/         # メインアプリ
+│   │   ├── page.tsx         # トップページ
+│   │   ├── fleeting/        # 走り書きメモ
+│   │   ├── literature/      # 文献メモ
+│   │   ├── permanent/       # 永久保存メモ
+│   │   ├── categories/      # カテゴリー
+│   │   └── graph/           # グラフビュー
+│   ├── api/
+│   │   ├── auth/[...nextauth]/
+│   │   ├── fleeting/
+│   │   ├── literature/
+│   │   ├── permanent/
+│   │   ├── categories/
+│   │   ├── graph/
+│   │   └── search/
+│   └── layout.tsx
+├── components/
+│   ├── layout/
+│   │   ├── Sidebar.tsx
+│   │   └── Header.tsx
+│   ├── notes/
+│   │   ├── NoteCard.tsx
+│   │   ├── NoteModal.tsx
+│   │   ├── NoteEditor.tsx
+│   │   ├── NotePreview.tsx
+│   │   └── BacklinkSection.tsx
+│   ├── graph/
+│   │   ├── GraphView.tsx
+│   │   ├── GraphFilter.tsx
+│   │   └── GraphNodeModal.tsx
+│   ├── category/
+│   │   ├── CategoryList.tsx
+│   │   └── CategoryCard.tsx
+│   ├── search/
+│   │   └── SearchBar.tsx
+│   └── ui/                  # 汎用UI
+├── lib/
+│   ├── prisma.ts
+│   ├── auth.ts
+│   ├── markdown.ts
+│   ├── link-parser.ts
+│   └── graph-data.ts
+├── hooks/
+│   ├── useNotes.ts
+│   ├── useCategories.ts
+│   └── useModal.ts
+├── types/
+│   ├── note.ts
+│   ├── category.ts
+│   └── graph.ts
+└── utils/
+    └── validators.ts        # Zodスキーマ
+```
+
+## コーディング規約
+
+- UIテキストとコメントは日本語で記述
+- Next.js 15 App Router規約に従った厳格なTypeScriptを使用
+- ESLintはNext.js core-web-vitalsとTypeScriptプリセットを使用
+- Tailwind CSS v4の新しいPostCSSアーキテクチャを使用（`@tailwindcss/postcss`依存）
+- Prismaスキーマは`prisma/schema.prisma`に定義
+
+## 重要な設計上の注意点
+
+### メモ済みチェックの実装
+
+走り書きメモまたは文献メモで`isDone`フラグをtrueにした際：
+1. 自動的に新しい永久保存メモを作成
+2. `sourceType`と`sourceId`に元メモの情報を記録
+3. 元メモはデータベースに保持（削除しない）
+4. トップページの一覧からは非表示（`isDone = false`のみ表示）
+
+### Markdownエディタの実装
+
+```tsx
+<ReactMarkdown
+  remarkPlugins={[remarkGfm]}
+  rehypePlugins={[rehypeHighlight]}
+  skipHtml={false}
+  unwrapDisallowed={true}
+>
+  {content}
+</ReactMarkdown>
+```
+
+### リンク記法の解析
+
+- `[[メモタイトル]]`を正規表現で検出
+- データベースでタイトルを検索
+- 該当メモへのリンクに変換
+- `permanent_note_links`テーブルに自動登録してバックリンクを追跡
+
+### グラフデータ構造
+
+```typescript
+{
+  nodes: Array<{
+    id: string
+    name: string
+    connections: number
+    group: number  // カテゴリーやメモタイプで色分け
+  }>
+  links: Array<{
+    source: string
+    target: string
+  }>
+}
+```
