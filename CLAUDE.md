@@ -207,6 +207,319 @@ src/
 - Tailwind CSS v4の新しいPostCSSアーキテクチャを使用（`@tailwindcss/postcss`依存）
 - Prismaスキーマは`prisma/schema.prisma`に定義
 
+## Next.js App Router ベストプラクティス
+
+### サーバーコンポーネントとクライアントコンポーネント
+
+#### デフォルトはServer Components
+- **すべてのコンポーネントはデフォルトでServer Components**として実装
+- データフェッチやバックエンドリソースへのアクセスはServer Componentsで行う
+- `'use client'`は必要な場合のみ使用
+
+#### Client Componentsが必要なケース
+以下の機能を使用する場合のみ`'use client'`を追加：
+- `useState`, `useEffect`, `useReducer`などのReact Hooks
+- イベントハンドラー（`onClick`, `onChange`など）
+- ブラウザAPI（`localStorage`, `window`など）
+- カスタムフック
+- React Context
+
+#### コンポーネント設計の推奨パターン
+```typescript
+// ✅ 良い例: Server ComponentでデータフェッチしてClient Componentに渡す
+// app/notes/page.tsx (Server Component)
+export default async function NotesPage() {
+  const notes = await fetchNotes(); // サーバーで実行
+  return <NoteList notes={notes} />; // Client Componentにpropsで渡す
+}
+
+// components/notes/NoteList.tsx (Client Component)
+'use client';
+export function NoteList({ notes }) {
+  const [selected, setSelected] = useState(null);
+  // インタラクティブな処理
+}
+
+// ❌ 悪い例: Client ComponentでデータフェッチするのはNG
+'use client';
+export function NoteList() {
+  const [notes, setNotes] = useState([]);
+  useEffect(() => {
+    fetch('/api/notes').then(/* ... */); // クライアント側で不必要なフェッチ
+  }, []);
+}
+```
+
+### データフェッチング
+
+#### Server Componentsでの直接フェッチ
+```typescript
+// ✅ 推奨: Server ComponentでPrisma直接使用
+import { prisma } from '@/lib/prisma';
+
+export default async function NotesPage() {
+  const notes = await prisma.permanentNote.findMany({
+    where: { userId: session.user.id },
+    include: { categories: true }
+  });
+
+  return <NoteList notes={notes} />;
+}
+```
+
+#### API Routesの使用判断
+以下の場合にAPI Routesを使用：
+- クライアント側からのミューテーション（POST/PUT/DELETE）
+- Webhookやサードパーティからのリクエスト受信
+- 複雑なビジネスロジックの分離
+
+#### Server Actionsの活用
+フォーム送信やミューテーションには**Server Actions**を優先的に使用：
+
+```typescript
+// app/notes/actions.ts
+'use server';
+
+import { revalidatePath } from 'next/cache';
+import { prisma } from '@/lib/prisma';
+
+export async function createNote(formData: FormData) {
+  const title = formData.get('title') as string;
+  const content = formData.get('content') as string;
+
+  await prisma.fleetingNote.create({
+    data: { title, content, userId: session.user.id }
+  });
+
+  revalidatePath('/notes');
+}
+
+// components/notes/NoteForm.tsx
+'use client';
+
+import { createNote } from '@/app/notes/actions';
+
+export function NoteForm() {
+  return (
+    <form action={createNote}>
+      <input name="title" />
+      <textarea name="content" />
+      <button type="submit">作成</button>
+    </form>
+  );
+}
+```
+
+### ルーティングとレイアウト
+
+#### ルートグループの活用
+認証状態や異なるレイアウトで`()`を使用：
+```
+app/
+├── (auth)/
+│   ├── login/page.tsx
+│   └── register/page.tsx
+└── (dashboard)/
+    ├── layout.tsx         # 認証後のレイアウト
+    └── page.tsx
+```
+
+#### レイアウトでの共通処理
+- 認証チェックはレイアウトで実施
+- 共通のサイドバーやヘッダーはレイアウトに配置
+- `loading.tsx`でローディング状態を管理
+- `error.tsx`でエラーハンドリング
+
+```typescript
+// app/(dashboard)/layout.tsx
+export default async function DashboardLayout({ children }) {
+  const session = await auth();
+  if (!session) redirect('/login');
+
+  return (
+    <div className="flex">
+      <Sidebar />
+      <main>{children}</main>
+    </div>
+  );
+}
+```
+
+### メタデータとSEO
+
+#### 静的メタデータ
+```typescript
+// app/(dashboard)/notes/page.tsx
+export const metadata = {
+  title: 'メモ一覧',
+  description: 'あなたの全てのメモを管理',
+};
+```
+
+#### 動的メタデータ
+```typescript
+// app/notes/[id]/page.tsx
+export async function generateMetadata({ params }) {
+  const note = await prisma.permanentNote.findUnique({
+    where: { id: params.id }
+  });
+
+  return {
+    title: note.title,
+    description: note.content.slice(0, 100),
+  };
+}
+```
+
+### パフォーマンス最適化
+
+#### 画像の最適化
+```tsx
+import Image from 'next/image';
+
+// ✅ 推奨
+<Image
+  src="/images/logo.png"
+  alt="ロゴ"
+  width={200}
+  height={50}
+  priority={true} // LCPに重要な画像に使用
+/>
+```
+
+#### 動的インポート
+重いコンポーネントは遅延ロード：
+```typescript
+import dynamic from 'next/dynamic';
+
+// グラフビューは重いのでクライアントサイドで遅延ロード
+const GraphView = dynamic(() => import('@/components/graph/GraphView'), {
+  loading: () => <p>グラフを読み込み中...</p>,
+  ssr: false // SSRをスキップ
+});
+```
+
+#### キャッシングとリバリデーション
+```typescript
+// 60秒ごとに再検証
+export const revalidate = 60;
+
+// または個別にfetchで指定
+const data = await fetch('https://api.example.com', {
+  next: { revalidate: 3600 } // 1時間
+});
+
+// Server Actionsでの再検証
+import { revalidatePath, revalidateTag } from 'next/cache';
+
+revalidatePath('/notes'); // 特定パスを再検証
+revalidateTag('notes'); // タグ付きキャッシュを再検証
+```
+
+### ファイル規約
+
+#### 特殊ファイル
+- `page.tsx` - ルートのUIを定義
+- `layout.tsx` - 共通レイアウト
+- `loading.tsx` - ローディングUI（Suspenseの自動ラップ）
+- `error.tsx` - エラーUI（Error Boundaryの自動ラップ）
+- `not-found.tsx` - 404ページ
+- `route.ts` - API Route Handler
+
+#### プライベートフォルダ
+`_folder`で始まるフォルダはルーティングから除外：
+```
+app/
+├── _lib/          # ルーティング対象外
+├── _components/   # ルーティング対象外
+└── notes/
+    └── page.tsx   # /notes としてアクセス可能
+```
+
+### 環境変数
+
+#### 命名規則
+- **クライアント側**: `NEXT_PUBLIC_`プレフィックスが必須
+- **サーバー側のみ**: プレフィックスなし
+
+```env
+# サーバー側のみ
+DATABASE_URL="postgresql://..."
+NEXTAUTH_SECRET="..."
+
+# クライアント・サーバー両方
+NEXT_PUBLIC_SUPABASE_URL="..."
+```
+
+#### 使用方法
+```typescript
+// Server Component または API Route
+const dbUrl = process.env.DATABASE_URL; // OK
+
+// Client Component
+const apiUrl = process.env.NEXT_PUBLIC_API_URL; // OK
+const dbUrl = process.env.DATABASE_URL; // undefined（アクセス不可）
+```
+
+### 型安全性
+
+#### Prisma型の活用
+```typescript
+import { Prisma } from '@prisma/client';
+
+// Prisma生成型を使用
+type NoteWithCategories = Prisma.PermanentNoteGetPayload<{
+  include: { categories: true }
+}>;
+
+// コンポーネントのpropsに使用
+interface NoteCardProps {
+  note: NoteWithCategories;
+}
+```
+
+#### Zodでのバリデーション
+```typescript
+// utils/validators.ts
+import { z } from 'zod';
+
+export const createNoteSchema = z.object({
+  title: z.string().min(1, 'タイトルは必須です').max(200),
+  content: z.string().optional(),
+  categoryIds: z.array(z.string()).optional(),
+});
+
+export type CreateNoteInput = z.infer<typeof createNoteSchema>;
+```
+
+### セキュリティ
+
+#### 認証チェック
+```typescript
+// Server ComponentまたはAPI Routeで必ず認証確認
+import { auth } from '@/lib/auth';
+
+export default async function ProtectedPage() {
+  const session = await auth();
+  if (!session) redirect('/login');
+
+  // 認証済みユーザーのみアクセス可能な処理
+}
+```
+
+#### CSRFトークン
+Server Actionsは自動的にCSRF保護されるため追加実装不要。
+
+#### XSS対策
+Reactが自動でエスケープするが、`dangerouslySetInnerHTML`は避ける：
+```tsx
+// ✅ 推奨: react-markdownを使用
+<ReactMarkdown>{content}</ReactMarkdown>
+
+// ❌ 避ける
+<div dangerouslySetInnerHTML={{ __html: content }} />
+```
+
 ## 重要な設計上の注意点
 
 ### メモ済みチェックの実装
