@@ -520,6 +520,605 @@ Reactが自動でエスケープするが、`dangerouslySetInnerHTML`は避け�
 <div dangerouslySetInnerHTML={{ __html: content }} />
 ```
 
+## Supabase ベストプラクティス
+
+### データベース接続
+
+#### Prismaとの統合
+PrismaをORMとして使用し、SupabaseのPostgreSQLに接続：
+
+```typescript
+// prisma/schema.prisma
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL") // Connection Poolingを回避する場合
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+```
+
+```env
+# .env
+DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres"
+```
+
+#### Prismaクライアントのシングルトン化
+開発時の複数インスタンス生成を防ぐ：
+
+```typescript
+// lib/prisma.ts
+import { PrismaClient } from '@prisma/client';
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+```
+
+### Row Level Security (RLS)
+
+#### RLSポリシーの設定
+Supabaseでは必ずRLSを有効化してセキュリティを確保：
+
+```sql
+-- fleeting_notesテーブルの例
+ALTER TABLE fleeting_notes ENABLE ROW LEVEL SECURITY;
+
+-- ユーザーは自分のメモのみ参照可能
+CREATE POLICY "Users can view their own fleeting notes"
+  ON fleeting_notes
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+-- ユーザーは自分のメモのみ作成可能
+CREATE POLICY "Users can create their own fleeting notes"
+  ON fleeting_notes
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+-- ユーザーは自分のメモのみ更新可能
+CREATE POLICY "Users can update their own fleeting notes"
+  ON fleeting_notes
+  FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- ユーザーは自分のメモのみ削除可能
+CREATE POLICY "Users can delete their own fleeting notes"
+  ON fleeting_notes
+  FOR DELETE
+  USING (auth.uid() = user_id);
+```
+
+#### Service Roleの使用
+RLSをバイパスする必要がある場合（管理機能など）：
+
+```typescript
+// lib/supabase-admin.ts
+import { createClient } from '@supabase/supabase-js';
+
+// Service Role Keyは絶対にクライアント側に公開しない
+export const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!, // サーバー側のみ
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
+);
+```
+
+### マイグレーション管理
+
+#### Prisma Migrateの使用
+```bash
+# マイグレーション作成
+npx prisma migrate dev --name add_categories
+
+# 本番環境へのデプロイ
+npx prisma migrate deploy
+```
+
+#### Supabase CLIとの併用
+Supabase特有の機能（Storage、Edge Functionsなど）：
+
+```bash
+# Supabaseプロジェクトと連携
+npx supabase init
+npx supabase link --project-ref [PROJECT_REF]
+
+# ローカルでSupabaseを起動
+npx supabase start
+
+# マイグレーションの作成
+npx supabase migration new add_rls_policies
+```
+
+### リアルタイム機能
+
+このアプリでは当面不要だが、将来的な拡張の場合：
+
+```typescript
+// リアルタイム購読（チーム機能で使用可能）
+'use client';
+
+import { useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+export function useRealtimeNotes() {
+  useEffect(() => {
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+
+    const channel = supabase
+      .channel('notes-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'permanent_notes'
+        },
+        (payload) => {
+          console.log('Change received!', payload);
+          // 状態を更新
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+}
+```
+
+### バックアップとリストア
+
+```bash
+# データベースバックアップ（Supabase Dashboard推奨）
+# または pg_dump を使用
+pg_dump "postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres" > backup.sql
+
+# リストア
+psql "postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres" < backup.sql
+```
+
+## Auth.js (NextAuth.js v5) ベストプラクティス
+
+### 基本セットアップ
+
+#### Auth.js設定ファイル
+```typescript
+// lib/auth.ts
+import NextAuth from "next-auth";
+import Google from "next-auth/providers/google";
+import Credentials from "next-auth/providers/credentials";
+import { PrismaAdapter } from "@auth/prisma-adapter";
+import { prisma } from "./prisma";
+import bcrypt from "bcryptjs";
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  adapter: PrismaAdapter(prisma),
+  session: {
+    strategy: "jwt", // JWTを使用（Supabaseとの相性が良い）
+  },
+  pages: {
+    signIn: "/login",
+    error: "/login",
+  },
+  providers: [
+    Google({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      allowDangerousEmailAccountLinking: true, // メールアドレスでのアカウント統合
+    }),
+    Credentials({
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) {
+          return null;
+        }
+
+        const user = await prisma.user.findUnique({
+          where: { email: credentials.email as string },
+        });
+
+        if (!user || !user.hashedPassword) {
+          return null;
+        }
+
+        const isValid = await bcrypt.compare(
+          credentials.password as string,
+          user.hashedPassword
+        );
+
+        if (!isValid) {
+          return null;
+        }
+
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        };
+      },
+    }),
+  ],
+  callbacks: {
+    async jwt({ token, user }) {
+      // JWTトークンにユーザーIDを追加
+      if (user) {
+        token.userId = user.id;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      // セッションにユーザーIDを追加
+      if (session.user) {
+        session.user.id = token.userId as string;
+      }
+      return session;
+    },
+  },
+});
+```
+
+#### API Route Handler
+```typescript
+// app/api/auth/[...nextauth]/route.ts
+import { handlers } from "@/lib/auth";
+
+export const { GET, POST } = handlers;
+```
+
+#### 型定義の拡張
+```typescript
+// types/next-auth.d.ts
+import NextAuth from "next-auth";
+
+declare module "next-auth" {
+  interface Session {
+    user: {
+      id: string;
+      email: string;
+      name?: string;
+      image?: string;
+    };
+  }
+}
+```
+
+### 認証の実装パターン
+
+#### Server Componentsでの認証チェック
+```typescript
+// app/(dashboard)/page.tsx
+import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
+
+export default async function DashboardPage() {
+  const session = await auth();
+
+  if (!session) {
+    redirect("/login");
+  }
+
+  // 認証済みユーザーのみアクセス可能
+  return <div>ようこそ、{session.user.name}さん</div>;
+}
+```
+
+#### Middlewareでの認証保護
+```typescript
+// middleware.ts
+import { auth } from "@/lib/auth";
+import { NextResponse } from "next/server";
+
+export default auth((req) => {
+  const isLoggedIn = !!req.auth;
+  const isAuthPage = req.nextUrl.pathname.startsWith("/login") ||
+                     req.nextUrl.pathname.startsWith("/register");
+
+  if (isAuthPage) {
+    if (isLoggedIn) {
+      // ログイン済みユーザーは認証ページにアクセスできない
+      return NextResponse.redirect(new URL("/", req.url));
+    }
+    return NextResponse.next();
+  }
+
+  if (!isLoggedIn) {
+    // 未認証ユーザーは保護されたページにアクセスできない
+    return NextResponse.redirect(new URL("/login", req.url));
+  }
+
+  return NextResponse.next();
+});
+
+export const config = {
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+};
+```
+
+#### Client Componentsでのセッション取得
+```typescript
+// app/providers.tsx
+'use client';
+
+import { SessionProvider } from "next-auth/react";
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  return <SessionProvider>{children}</SessionProvider>;
+}
+
+// app/layout.tsx
+import { Providers } from "./providers";
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+
+// components/Header.tsx
+'use client';
+
+import { useSession, signOut } from "next-auth/react";
+
+export function Header() {
+  const { data: session } = useSession();
+
+  if (!session) return null;
+
+  return (
+    <header>
+      <p>{session.user.email}</p>
+      <button onClick={() => signOut()}>ログアウト</button>
+    </header>
+  );
+}
+```
+
+### ログイン・登録の実装
+
+#### ログインフォーム（Server Actions使用）
+```typescript
+// app/(auth)/login/page.tsx
+import { signIn } from "@/lib/auth";
+import { redirect } from "next/navigation";
+
+export default function LoginPage() {
+  async function handleCredentialsLogin(formData: FormData) {
+    "use server";
+
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
+
+    const result = await signIn("credentials", {
+      email,
+      password,
+      redirect: false,
+    });
+
+    if (result?.error) {
+      // エラーハンドリング
+      return { error: "ログインに失敗しました" };
+    }
+
+    redirect("/");
+  }
+
+  async function handleGoogleLogin() {
+    "use server";
+    await signIn("google", { redirectTo: "/" });
+  }
+
+  return (
+    <div>
+      <h1>ログイン</h1>
+
+      {/* 認証情報でログイン */}
+      <form action={handleCredentialsLogin}>
+        <input name="email" type="email" placeholder="メールアドレス" required />
+        <input name="password" type="password" placeholder="パスワード" required />
+        <button type="submit">ログイン</button>
+      </form>
+
+      {/* Googleでログイン */}
+      <form action={handleGoogleLogin}>
+        <button type="submit">Googleでログイン</button>
+      </form>
+    </div>
+  );
+}
+```
+
+#### ユーザー登録
+```typescript
+// app/(auth)/register/actions.ts
+"use server";
+
+import { prisma } from "@/lib/prisma";
+import bcrypt from "bcryptjs";
+import { signIn } from "@/lib/auth";
+import { z } from "zod";
+
+const registerSchema = z.object({
+  name: z.string().min(1, "名前は必須です"),
+  email: z.string().email("有効なメールアドレスを入力してください"),
+  password: z.string().min(8, "パスワードは8文字以上である必要があります"),
+});
+
+export async function registerUser(formData: FormData) {
+  const validatedFields = registerSchema.safeParse({
+    name: formData.get("name"),
+    email: formData.get("email"),
+    password: formData.get("password"),
+  });
+
+  if (!validatedFields.success) {
+    return { error: "入力内容が正しくありません" };
+  }
+
+  const { name, email, password } = validatedFields.data;
+
+  // 既存ユーザーチェック
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  if (existingUser) {
+    return { error: "このメールアドレスは既に登録されています" };
+  }
+
+  // パスワードのハッシュ化
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  // ユーザー作成
+  await prisma.user.create({
+    data: {
+      name,
+      email,
+      hashedPassword,
+    },
+  });
+
+  // 自動ログイン
+  await signIn("credentials", {
+    email,
+    password,
+    redirect: false,
+  });
+
+  return { success: true };
+}
+```
+
+### セキュリティのベストプラクティス
+
+#### 環境変数の設定
+```env
+# .env
+NEXTAUTH_URL="http://localhost:3000"
+NEXTAUTH_SECRET="your-secret-key-here" # openssl rand -base64 32 で生成
+
+# Google OAuth
+GOOGLE_CLIENT_ID="your-google-client-id"
+GOOGLE_CLIENT_SECRET="your-google-client-secret"
+
+# Database
+DATABASE_URL="postgresql://..."
+```
+
+#### パスワードのハッシュ化
+```typescript
+import bcrypt from "bcryptjs";
+
+// 登録時
+const hashedPassword = await bcrypt.hash(password, 10);
+
+// ログイン時の検証
+const isValid = await bcrypt.compare(password, user.hashedPassword);
+```
+
+#### CSRFトークン保護
+Auth.js v5は自動的にCSRF保護を提供。Server Actionsも自動保護。
+
+#### セッション管理
+```typescript
+// JWTストラテジーを使用（推奨）
+session: {
+  strategy: "jwt",
+  maxAge: 30 * 24 * 60 * 60, // 30日
+}
+
+// データベースセッションを使用する場合
+session: {
+  strategy: "database",
+  maxAge: 30 * 24 * 60 * 60,
+  updateAge: 24 * 60 * 60, // 24時間ごとに更新
+}
+```
+
+### Server Actionsでの認証利用
+
+```typescript
+// app/notes/actions.ts
+"use server";
+
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { revalidatePath } from "next/cache";
+
+export async function createNote(formData: FormData) {
+  // 認証チェック
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Error("認証が必要です");
+  }
+
+  const title = formData.get("title") as string;
+  const content = formData.get("content") as string;
+
+  // ユーザーIDを自動的に設定
+  await prisma.fleetingNote.create({
+    data: {
+      title,
+      content,
+      userId: session.user.id, // セッションから取得
+    },
+  });
+
+  revalidatePath("/");
+}
+```
+
+### API Routesでの認証
+
+```typescript
+// app/api/notes/route.ts
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { NextResponse } from "next/server";
+
+export async function GET(request: Request) {
+  const session = await auth();
+
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const notes = await prisma.permanentNote.findMany({
+    where: { userId: session.user.id },
+  });
+
+  return NextResponse.json(notes);
+}
+```
+
 ## 重要な設計上の注意点
 
 ### メモ済みチェックの実装
